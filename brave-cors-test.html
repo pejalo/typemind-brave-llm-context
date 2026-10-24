@@ -8,33 +8,37 @@
   body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 1rem auto; padding: 0 1rem; background: #111; color: #eee; }
   h1 { font-size: 1.3rem; }
   button { font-size: 1rem; padding: .6rem 1rem; margin: .3rem .4rem .3rem 0; border: 0; border-radius: 8px; background: #3a6ea5; color: #fff; }
-  input { font-size: 1rem; padding: .4rem; width: 100%; box-sizing: border-box; }
+  input { font-size: 1rem; padding: .4rem; width: 100%; box-sizing: border-box; margin-bottom: .8rem; }
   .result { display: none; margin: .8rem 0; padding: .8rem; border-radius: 8px; background: #1c2733; white-space: pre-wrap; word-break: break-word; font-size: .95rem; }
   .hint { color: #9ab; font-size: .85rem; }
 </style>
 </head>
 <body>
 <h1>Brave LLM Context — CORS test</h1>
-<p>This page makes the same browser requests the TypingMind plugin makes, and reports whether the browser blocks them. Run <b>both</b> tests.</p>
+<p>Paste your <b>API key</b> and (once deployed) your <b>relay URL</b>, then tap <b>Test 3</b> to check the full chain: browser → relay → Brave. That is exactly the path the TypingMind plugin will use.</p>
 
-<label><b>API key</b> (your X-Subscription-Token; needed for Test 2)</label>
+<label><b>API key</b> (X-Subscription-Token)</label>
 <input id="key" type="password" autocomplete="off" placeholder="your key">
-<p class="hint">The key is only stored in this browser, for this page, to pre-fill next time. It is sent only to api.search.brave.com.</p>
 
-<button id="t1">Test 1: simple GET (no custom header)</button>
-<button id="t2">Test 2: with X-Subscription-Token (what the plugin does)</button>
+<label><b>Relay URL</b> (from Netlify, ends in /relay)</label>
+<input id="relay" type="text" autocomplete="off" placeholder="https://your-site.netlify.app/.netlify/functions/relay">
+<p class="hint">Both fields are remembered in this browser. The key is only ever sent to api.search.brave.com, directly or via your relay.</p>
 
-<div id="r1" class="result"></div>
-<div id="r2" class="result"></div>
+<button id="t3">Test 3: full chain via relay</button>
+
+<div id="r3" class="result"></div>
 <p class="hint">
-<b>How to read the results</b><br>
-• Both green → CORS is fine, the plugin works as-is (no proxy).<br>
-• Test 1 green, Test 2 red → Brave's preflight blocks the custom header → you need the small relay I can write for you.<br>
-• Test 1 red → Brave blocks cross-origin calls entirely → relay needed.
+<b>Reading the result</b><br>
+• Green "chain works" → everything is fine; set PROXY_PREFIX in the plugin and you are done.<br>
+• HTTP 401 → chain works, key rejected (double-check it).<br>
+• HTTP 403 from Brave → chain works, but your plan/token may not include the LLM Context product.<br>
+• Red "blocked" → the relay isn't deployed correctly or the URL is wrong.
 </p>
 <script>
 const keyInput = document.getElementById("key");
+const relayInput = document.getElementById("relay");
 try { keyInput.value = localStorage.getItem("braveCorsTestKey") || ""; } catch (e) {}
+try { relayInput.value = localStorage.getItem("braveCorsTestRelay") || ""; } catch (e) {}
 
 function report(el, ok, lines) {
   el.style.display = "block";
@@ -43,63 +47,45 @@ function report(el, ok, lines) {
   el.innerHTML = lines.map(function (l) { return "<div>" + l + "</div>"; }).join("");
 }
 
-async function doFetch(url, headers) {
-  const t0 = Date.now();
-  const res = await fetch(url, { method: "GET", headers: headers });
-  const text = await res.text();
-  return { res: res, text: text, ms: Date.now() - t0 };
-}
-
-document.getElementById("t1").onclick = function () {
-  const el = document.getElementById("r1");
-  el.style.display = "block";
-  el.textContent = "Running…";
-  doFetch("https://api.search.brave.com/res/v1/llm/context?q=hello", { "Accept": "application/json" })
-    .then(function (o) {
-      const aco = o.res.headers.get("Access-Control-Allow-Origin");
-      const lines = [
-        "✅ Simple GET works — Brave allows cross-origin calls from browsers.",
-        "HTTP " + o.res.status + (o.res.status === 401 ? " (expected: no key sent)" : "") + " in " + o.ms + " ms",
-        "Access-Control-Allow-Origin header: " + (aco || "(not readable here, but fetch still succeeded)")
-      ];
-      if (aco === "*") lines.push("Header is '*', so it will work from any page — including TypingMind.");
-      else if (aco) lines.push("Header is not '*'; it only whitelists specific origins. If the plugin later fails, that is why.");
-      report(el, true, lines);
-    })
-    .catch(function (e) {
-      report(el, false, ["❌ Blocked: " + e.message, "Even a plain GET is blocked by the browser. A relay is needed."]);
-    });
-};
-
-document.getElementById("t2").onclick = function () {
-  const el = document.getElementById("r2");
+document.getElementById("t3").onclick = async function () {
+  const el = document.getElementById("r3");
   const key = keyInput.value.trim();
-  try { localStorage.setItem("braveCorsTestKey", key); } catch (e) {}
+  let relay = relayInput.value.trim().replace(/\/+$/, "");
+  try {
+    localStorage.setItem("braveCorsTestKey", key);
+    localStorage.setItem("braveCorsTestRelay", relay);
+  } catch (e) {}
   el.style.display = "block";
   el.textContent = "Running…";
-  const headers = { "Accept": "application/json" };
-  if (key) headers["X-Subscription-Token"] = key;
-  doFetch("https://api.search.brave.com/res/v1/llm/context?q=hello", headers)
-    .then(function (o) {
-      let note;
-      if (o.res.status === 200) note = "Full success — the plugin will work exactly as-is.";
-      else if (o.res.status === 401) note = "CORS is fine, but the key was rejected. Re-check the key and try again.";
-      else if (o.res.status === 403) note = "CORS is fine, but access denied — your plan/token may not include the LLM Context product.";
-      else note = "CORS is fine; Brave returned HTTP " + o.res.status + ".";
-      report(el, true, [
-        "✅ Request with X-Subscription-Token header works — the CORS preflight is allowed.",
-        "HTTP " + o.res.status + " in " + o.ms + " ms",
-        note,
-        "Body preview: " + o.text.slice(0, 150)
-      ]);
-    })
-    .catch(function (e) {
-      report(el, false, [
-        "❌ Blocked: " + e.message,
-        "The browser rejected the request before seeing Brave's answer — the CORS preflight is failing because of the custom header.",
-        "Fix: run the plugin through a small relay (Cloudflare Worker) you host; ask in the chat and it will be written for you."
-      ]);
+
+  if (!relay) { report(el, false, ["❌ Paste the relay function URL first (it ends in /relay)."]); return; }
+  if (!key) { report(el, false, ["Paste your API key so Brave accepts the request."]); return; }
+
+  const target = relay + "?u=" + encodeURIComponent("https://api.search.brave.com/res/v1/llm/context?q=hello");
+  try {
+    const res = await fetch(target, {
+      method: "GET",
+      headers: { "Accept": "application/json", "X-Subscription-Token": key }
     });
+    const text = await res.text();
+    let note, ok = true;
+    if (res.status === 200) note = "Full success — the plugin will work as-is through this relay.";
+    else if (res.status === 401) note = "Chain works; Brave rejected the key (401). Double-check it.";
+    else if (res.status === 403) note = "Chain works; Brave returned 403 — your plan/token may not include the LLM Context product, or the relay blocked the target.";
+    else if (res.status === 404) note = "Relay URL not found — the function is not deployed at that URL yet.";
+    else { note = "Chain works; Brave/relay returned HTTP " + res.status + "."; ok = res.status < 500; }
+    report(el, ok, [
+      "✅ Chain browser → relay → Brave is working.",
+      "HTTP " + res.status,
+      note,
+      "Body preview: " + text.slice(0, 200)
+    ]);
+  } catch (e) {
+    report(el, false, [
+      "❌ Blocked: " + e.message,
+      "The browser could not reach the relay. Check that the URL is exactly the one from Netlify (ends in /relay) and that the deploy finished."
+    ]);
+  }
 };
 </script>
 </body>
