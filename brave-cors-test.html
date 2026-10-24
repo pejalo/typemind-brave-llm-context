@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brave CORS test</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 1rem auto; padding: 0 1rem; background: #111; color: #eee; }
+  h1 { font-size: 1.3rem; }
+  button { font-size: 1rem; padding: .6rem 1rem; margin: .3rem .4rem .3rem 0; border: 0; border-radius: 8px; background: #3a6ea5; color: #fff; }
+  input { font-size: 1rem; padding: .4rem; width: 100%; box-sizing: border-box; }
+  .result { display: none; margin: .8rem 0; padding: .8rem; border-radius: 8px; background: #1c2733; white-space: pre-wrap; word-break: break-word; font-size: .95rem; }
+  .hint { color: #9ab; font-size: .85rem; }
+</style>
+</head>
+<body>
+<h1>Brave LLM Context — CORS test</h1>
+<p>This page makes the same browser requests the TypingMind plugin makes, and reports whether the browser blocks them. Run <b>both</b> tests.</p>
+
+<label><b>API key</b> (your X-Subscription-Token; needed for Test 2)</label>
+<input id="key" type="password" autocomplete="off" placeholder="your key">
+<p class="hint">The key is only stored in this browser, for this page, to pre-fill next time. It is sent only to api.search.brave.com.</p>
+
+<button id="t1">Test 1: simple GET (no custom header)</button>
+<button id="t2">Test 2: with X-Subscription-Token (what the plugin does)</button>
+
+<div id="r1" class="result"></div>
+<div id="r2" class="result"></div>
+<p class="hint">
+<b>How to read the results</b><br>
+• Both green → CORS is fine, the plugin works as-is (no proxy).<br>
+• Test 1 green, Test 2 red → Brave's preflight blocks the custom header → you need the small relay I can write for you.<br>
+• Test 1 red → Brave blocks cross-origin calls entirely → relay needed.
+</p>
+<script>
+const keyInput = document.getElementById("key");
+try { keyInput.value = localStorage.getItem("braveCorsTestKey") || ""; } catch (e) {}
+
+function report(el, ok, lines) {
+  el.style.display = "block";
+  el.style.background = ok ? "#10351b" : "#3a1214";
+  el.style.borderLeft = "4px solid " + (ok ? "#2ecc71" : "#e74c3c");
+  el.innerHTML = lines.map(function (l) { return "<div>" + l + "</div>"; }).join("");
+}
+
+async function doFetch(url, headers) {
+  const t0 = Date.now();
+  const res = await fetch(url, { method: "GET", headers: headers });
+  const text = await res.text();
+  return { res: res, text: text, ms: Date.now() - t0 };
+}
+
+document.getElementById("t1").onclick = function () {
+  const el = document.getElementById("r1");
+  el.style.display = "block";
+  el.textContent = "Running…";
+  doFetch("https://api.search.brave.com/res/v1/llm/context?q=hello", { "Accept": "application/json" })
+    .then(function (o) {
+      const aco = o.res.headers.get("Access-Control-Allow-Origin");
+      const lines = [
+        "✅ Simple GET works — Brave allows cross-origin calls from browsers.",
+        "HTTP " + o.res.status + (o.res.status === 401 ? " (expected: no key sent)" : "") + " in " + o.ms + " ms",
+        "Access-Control-Allow-Origin header: " + (aco || "(not readable here, but fetch still succeeded)")
+      ];
+      if (aco === "*") lines.push("Header is '*', so it will work from any page — including TypingMind.");
+      else if (aco) lines.push("Header is not '*'; it only whitelists specific origins. If the plugin later fails, that is why.");
+      report(el, true, lines);
+    })
+    .catch(function (e) {
+      report(el, false, ["❌ Blocked: " + e.message, "Even a plain GET is blocked by the browser. A relay is needed."]);
+    });
+};
+
+document.getElementById("t2").onclick = function () {
+  const el = document.getElementById("r2");
+  const key = keyInput.value.trim();
+  try { localStorage.setItem("braveCorsTestKey", key); } catch (e) {}
+  el.style.display = "block";
+  el.textContent = "Running…";
+  const headers = { "Accept": "application/json" };
+  if (key) headers["X-Subscription-Token"] = key;
+  doFetch("https://api.search.brave.com/res/v1/llm/context?q=hello", headers)
+    .then(function (o) {
+      let note;
+      if (o.res.status === 200) note = "Full success — the plugin will work exactly as-is.";
+      else if (o.res.status === 401) note = "CORS is fine, but the key was rejected. Re-check the key and try again.";
+      else if (o.res.status === 403) note = "CORS is fine, but access denied — your plan/token may not include the LLM Context product.";
+      else note = "CORS is fine; Brave returned HTTP " + o.res.status + ".";
+      report(el, true, [
+        "✅ Request with X-Subscription-Token header works — the CORS preflight is allowed.",
+        "HTTP " + o.res.status + " in " + o.ms + " ms",
+        note,
+        "Body preview: " + o.text.slice(0, 150)
+      ]);
+    })
+    .catch(function (e) {
+      report(el, false, [
+        "❌ Blocked: " + e.message,
+        "The browser rejected the request before seeing Brave's answer — the CORS preflight is failing because of the custom header.",
+        "Fix: run the plugin through a small relay (Cloudflare Worker) you host; ask in the chat and it will be written for you."
+      ]);
+    });
+};
+</script>
+</body>
+</html>
